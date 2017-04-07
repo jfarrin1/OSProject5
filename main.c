@@ -21,6 +21,7 @@ int nframes;
 char *virtmem;
 char *physmem;
 int *frameTable;
+int *writeTable;
 struct disk *disk;
 int numFramesUsed =0;
 int diskWrites = 0;
@@ -52,6 +53,42 @@ int pushQueue(int val){
 	return 0;
 }
 
+int checkWrite(struct page_table *pt)
+{
+	int i;
+	int bits;
+	int frame;
+	int r = rand()%nframes;
+	int count=0;
+	for(i=0;i<nframes;i++)
+	{
+		page_table_get_entry(pt,frameTable[i],&frame,&bits);
+		if(bits<3)
+		{
+			count++;
+		}
+	}
+	printf("# of write-free frames: %d\n",count);
+	if(count==1)
+	{
+		return r;
+	}
+	else
+	{
+		for(i=0;i<nframes;i++)
+		{
+			page_table_get_entry(pt,frameTable[r],&frame,&bits);
+			if(bits<3)
+			{
+				printf("Returning frame %d\n",r);
+				return r;
+			}
+			r = (r+1)%nframes;
+		}
+	}
+	return rand()%nframes;
+
+}
 int findFrame(){
 	int i;
 	for(i=0; i<nframes; i++){
@@ -63,9 +100,10 @@ int findFrame(){
 }
 
 
+
+
 void page_fault_handler( struct page_table *pt, int page )
 {
-	pagefaults++;
 /*
 	int bits
 	int fn
@@ -80,42 +118,60 @@ void page_fault_handler( struct page_table *pt, int page )
 	switch(bits){
 		case PROT_READ:
 			page_table_set_entry(pt,page,frame,PROT_READ|PROT_WRITE);
+//			disk_read(disk,page,&physmem[frame*PAGE_SIZE]);
 			printf("adding write permission\n");
+//			diskReads++;
+//			pagefaults++;
 			break;
 		case PROT_READ|PROT_WRITE:
 			page_table_set_entry(pt,page,frame,PROT_READ|PROT_WRITE|PROT_EXEC);
+//			disk_read(disk,page,&physmem[frame*PAGE_SIZE]);
 			printf("adding exec permission\n");
+//			diskReads++;
+//			pagefaults++;
 			break;
 		case 0:
+			pagefaults++;
 			printf("not in frame\n");
 			if(numFramesUsed == nframes){
 				//rand fifo custom
 				//rand
 				if(method ==1){
 					evictFrame = rand()%nframes;
+				//fifo
 				}else if(method==2){
 					evictFrame = popQueue();
+				//custom
 				}else if(method==3){
-					evictFrame = 69;
+					evictFrame = rand()%nframes;
+					page_table_get_entry(pt, frameTable[evictFrame],&evictFrame,&evictBits);
+					if(evictBits >=3)
+					{
+						printf("Finding new frame with checkWrite\n");
+						evictFrame = checkWrite(pt);
+					}
+
 				}
 				printf("evicting page %d, frame: %d\n",frameTable[evictFrame], evictFrame);
 				page_table_get_entry(pt, frameTable[evictFrame], &evictFrame, &evictBits);
+				//write if bits>=3
 				if(evictBits>=3){
 					disk_write(disk,frameTable[evictFrame], &physmem[evictFrame*PAGE_SIZE]);
 					printf("writing page %d to disk\n", frameTable[evictFrame]);
 					diskWrites++;
 				}
-				page_table_set_entry(pt, frameTable[evictFrame], 0, 0);
+				//set entry
+				page_table_set_entry(pt,frameTable[evictFrame], 0, 0);
 				frameTable[evictFrame] =-1;
 				numFramesUsed--;
 				frame = evictFrame;
-			} else {
+			} else { //find any open frame
 				frame = findFrame();
 				printf("finding open frame: %d\n", frame);
 			}
 			page_table_set_entry(pt,page,frame,PROT_READ);
 			disk_read(disk,page,&physmem[frame*PAGE_SIZE]);
-			if (method==2){
+			if (method==2){ //make sure queue isnt full
 				int rc =pushQueue(frame);
 				if (rc==0) printf("error: queue is full\n");
 			}
